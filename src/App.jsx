@@ -17,7 +17,7 @@ import {
 } from 'firebase/firestore';
 import { 
   Layout, Plus, Code, ExternalLink, Box, 
-  ArrowLeft, Lock, User, LogOut, Globe, Search
+  ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2
 } from 'lucide-react';
 
 // --- Firebase Setup ---
@@ -131,32 +131,41 @@ export default function ProjectHub() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
+  
+  // NEW: Loading state to prevent "Flash of Access Denied"
+  const [authLoading, setAuthLoading] = useState(true);
 
-  // 1. Authentication (Simplified: No Anonymous Login)
+  // 1. Authentication 
   useEffect(() => {
-    // Handle Google Redirect
-    getRedirectResult(auth).catch(err => console.error("Redirect error", err));
+    // Handle Google Redirect Result
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result) console.log("Redirect Login Success:", result.user.email);
+      })
+      .catch(err => console.error("Redirect error", err));
 
-    // Just listen for real users. If null, we stay Guest.
-    return onAuthStateChanged(auth, (u) => {
+    // Listen for Auth Changes
+    const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      setIsCreator(!!u); // If u exists, you are a Creator. If null, Guest.
+      setIsCreator(!!u);
+      setAuthLoading(false); // <--- STOP LOADING only when we know the result
     });
+    
+    return () => unsub();
   }, []);
 
   // 2. Data Sync
   useEffect(() => {
-    // Removed "if (!user) return" so Guests can see data too!
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects');
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setProjects(data);
     }, (error) => {
-      console.log("Sync Error (likely permissions):", error.message);
+       console.log("Database Read Error:", error.message);
     });
     return () => unsub();
-  }, []); // Runs once on mount
+  }, []);
 
   // 3. Routing
   useEffect(() => {
@@ -189,6 +198,7 @@ export default function ProjectHub() {
 
   const toggleLogin = async () => {
     if (!isCreator) {
+      setAuthLoading(true); // Show spinner immediately
       const provider = new GoogleAuthProvider();
       await signInWithRedirect(auth, provider);
     } else {
@@ -199,6 +209,17 @@ export default function ProjectHub() {
   // View Logic
   const activeProject = projects.find(p => p.id === activeProjectId);
   const filteredProjects = projects.filter(p => p.title.toLowerCase().includes(searchTerm.toLowerCase()) || p.description.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  // --- LOADING SCREEN ---
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 flex-col gap-4">
+        <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+        <p className="text-slate-500 font-medium">Connecting to Google...</p>
+      </div>
+    );
+  }
+  // ----------------------
 
   if (view === 'view' && activeProject) return <ProjectViewer project={activeProject} onExit={() => navigate('#/')} />;
 
