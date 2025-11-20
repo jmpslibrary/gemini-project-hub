@@ -48,15 +48,50 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
 
+// 1. Authentication
   useEffect(() => {
-    if (iframeRef.current && project) {
-      const doc = iframeRef.current.contentDocument;
-      doc.open();
-      const script = `<script>window.onerror = function(m){document.body.innerHTML='<div style="color:red;padding:20px;font-family:sans-serif"><h3>Runtime Error</h3>'+m+'</div>'}</script>`;
-      doc.write(script + project.code);
-      doc.close();
-    }
-  }, [project]);
+    let isMounted = true;
+
+    const initAuth = async () => {
+      // Step A: Check if we are coming back from Google
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          console.log("Redirect Success! User:", result.user);
+          return; // Stop here, we have a real user!
+        }
+      } catch (error) {
+        console.error("Redirect Error:", error);
+      }
+
+      // Step B: If no user exists at all (and no redirect happened), THEN go Guest.
+      // We check isMounted to prevent double-firing in development.
+      if (!auth.currentUser && isMounted) {
+         console.log("No user found, starting Anonymous session...");
+         await signInAnonymously(auth);
+      }
+    };
+    
+    initAuth();
+
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!isMounted) return;
+      
+      console.log("Auth State Changed:", u?.uid, "| Anonymous:", u?.isAnonymous);
+      setUser(u);
+      
+      if (u && !u.isAnonymous) {
+        setIsCreator(true);
+      } else {
+        setIsCreator(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsub();
+    };
+  }, []);
 
   if (!project) return <div className="flex items-center justify-center h-screen text-slate-500">Loading Project...</div>;
 
@@ -266,9 +301,14 @@ export default function ProjectHub() {
     navigate('#/');
   };
 
-  const toggleLogin = async () => {
+const toggleLogin = async () => {
     if (!isCreator) {
       const provider = new GoogleAuthProvider();
+      
+      // FIX: Force logout first to clear the "Anonymous" session
+      // This ensures the app doesn't get confused by the old user
+      await signOut(auth);
+      
       try {
         await signInWithRedirect(auth, provider);
       } catch (error) {
