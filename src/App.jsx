@@ -7,7 +7,8 @@ import {
   onAuthStateChanged,
   signOut,
   GoogleAuthProvider, 
-  signInWithRedirect 
+  signInWithRedirect,
+  getRedirectResult // <--- NEW IMPORT
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -47,7 +48,6 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
 
-  // FIX: Restored the Iframe logic here (this was missing in your file)
   useEffect(() => {
     if (iframeRef.current && project) {
       const doc = iframeRef.current.contentDocument;
@@ -183,23 +183,35 @@ export default function ProjectHub() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
 
-  // 1. Authentication (FIX: Moved the correct logic here)
+  // 1. Authentication (FIX: Check for Redirect Result BEFORE Guest Login)
   useEffect(() => {
     const initAuth = async () => {
-      // Only start anonymous session if we aren't already logged in
+      // Step A: Check if we are returning from Google
+      try {
+        const result = await getRedirectResult(auth);
+        if (result) {
+          console.log("Redirect Login Success:", result.user);
+          return; // Stop! Don't sign in as Guest, we have a real user.
+        }
+      } catch (error) {
+        console.error("Redirect Error:", error);
+      }
+
+      // Step B: Only if NO user exists, go Guest
       if (!auth.currentUser) {
          await signInAnonymously(auth);
       }
     };
+    
     initAuth();
 
+    // Listen for updates
     return onAuthStateChanged(auth, (u) => {
       console.log("Auth User Detected:", u);
       if (u) console.log("Is Anonymous?", u.isAnonymous);
 
       setUser(u);
       
-      // This logic now correctly updates the UI
       if (u && !u.isAnonymous) {
         setIsCreator(true);
       } else {
@@ -246,7 +258,7 @@ export default function ProjectHub() {
   const handleUpload = async (title, desc, code) => {
     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects'), {
       title, 
-      description: desc, // Fixed variable name match
+      description: desc, 
       code: cleanCode(code), 
       authorId: user.uid, 
       createdAt: serverTimestamp()
