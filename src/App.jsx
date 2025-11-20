@@ -5,8 +5,7 @@ import {
   onAuthStateChanged,
   signOut,
   GoogleAuthProvider, 
-  signInWithRedirect,
-  getRedirectResult 
+  signInWithPopup // <--- Back to Popup (Works better with Hash Router)
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -131,26 +130,15 @@ export default function ProjectHub() {
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
-  
-  // NEW: Loading state to prevent "Flash of Access Denied"
   const [authLoading, setAuthLoading] = useState(true);
 
   // 1. Authentication 
   useEffect(() => {
-    // Handle Google Redirect Result
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result) console.log("Redirect Login Success:", result.user.email);
-      })
-      .catch(err => console.error("Redirect error", err));
-
-    // Listen for Auth Changes
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsCreator(!!u);
-      setAuthLoading(false); // <--- STOP LOADING only when we know the result
+      setAuthLoading(false);
     });
-    
     return () => unsub();
   }, []);
 
@@ -162,7 +150,7 @@ export default function ProjectHub() {
       data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setProjects(data);
     }, (error) => {
-       console.log("Database Read Error:", error.message);
+       console.log("DB Error:", error.message);
     });
     return () => unsub();
   }, []);
@@ -198,9 +186,14 @@ export default function ProjectHub() {
 
   const toggleLogin = async () => {
     if (!isCreator) {
-      setAuthLoading(true); // Show spinner immediately
       const provider = new GoogleAuthProvider();
-      await signInWithRedirect(auth, provider);
+      try {
+        // POPUP IS BACK!
+        // It works now because we removed the "Anonymous" user logic that was breaking it.
+        await signInWithPopup(auth, provider);
+      } catch (error) {
+        console.error("Login failed", error);
+      }
     } else {
       await signOut(auth);
     }
@@ -210,16 +203,14 @@ export default function ProjectHub() {
   const activeProject = projects.find(p => p.id === activeProjectId);
   const filteredProjects = projects.filter(p => p.title.toLowerCase().includes(searchTerm.toLowerCase()) || p.description.toLowerCase().includes(searchTerm.toLowerCase()));
 
-  // --- LOADING SCREEN ---
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 flex-col gap-4">
         <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-        <p className="text-slate-500 font-medium">Connecting to Google...</p>
+        <p className="text-slate-500 font-medium">Checking Access...</p>
       </div>
     );
   }
-  // ----------------------
 
   if (view === 'view' && activeProject) return <ProjectViewer project={activeProject} onExit={() => navigate('#/')} />;
 
