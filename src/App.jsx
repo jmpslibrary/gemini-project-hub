@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInAnonymously, 
   onAuthStateChanged,
   signOut,
   GoogleAuthProvider, 
@@ -14,7 +13,6 @@ import {
   collection, 
   addDoc, 
   onSnapshot, 
-  doc, 
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
@@ -24,7 +22,6 @@ import {
 
 // --- Firebase Setup ---
 const env = import.meta.env; 
-
 const firebaseConfig = {
   apiKey: env.VITE_API_KEY,
   authDomain: env.VITE_AUTH_DOMAIN,
@@ -45,7 +42,6 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 // --- Component: Project Viewer ---
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
-
   useEffect(() => {
     if (iframeRef.current && project) {
       const doc = iframeRef.current.contentDocument;
@@ -136,54 +132,31 @@ export default function ProjectHub() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
 
-  // 1. Authentication Logic (The Fix)
+  // 1. Authentication (Simplified: No Anonymous Login)
   useEffect(() => {
-    // Attempt to capture the Google Redirect result first
-    getRedirectResult(auth).then((result) => {
-      if (result) {
-        console.log("Google Redirect Success:", result.user.uid);
-        // Do NOT sign in anonymously if we found a Google user
-      }
-    }).catch(err => console.error("Redirect check error", err));
+    // Handle Google Redirect
+    getRedirectResult(auth).catch(err => console.error("Redirect error", err));
 
-    // Listen for real-time auth changes
-    const unsub = onAuthStateChanged(auth, (u) => {
-      console.log("Auth State:", u ? (u.isAnonymous ? "Anonymous" : "Creator") : "Null");
+    // Just listen for real users. If null, we stay Guest.
+    return onAuthStateChanged(auth, (u) => {
       setUser(u);
-      
-      if (u && !u.isAnonymous) {
-        setIsCreator(true);
-      } else {
-        setIsCreator(false);
-      }
+      setIsCreator(!!u); // If u exists, you are a Creator. If null, Guest.
     });
-
-    // LAZY LOAD GUEST: Wait 1 second before creating a Guest account.
-    // This gives the Google Redirect enough time to "win the race".
-    const timer = setTimeout(() => {
-      if (!auth.currentUser) {
-        console.log("No user found after 1s. Starting Guest session.");
-        signInAnonymously(auth).catch(e => console.error("Guest login error", e));
-      }
-    }, 1000);
-
-    return () => {
-      unsub();
-      clearTimeout(timer);
-    };
   }, []);
 
   // 2. Data Sync
   useEffect(() => {
-    if (!user) return;
+    // Removed "if (!user) return" so Guests can see data too!
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects');
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setProjects(data);
+    }, (error) => {
+      console.log("Sync Error (likely permissions):", error.message);
     });
     return () => unsub();
-  }, [user]);
+  }, []); // Runs once on mount
 
   // 3. Routing
   useEffect(() => {
@@ -216,13 +189,10 @@ export default function ProjectHub() {
 
   const toggleLogin = async () => {
     if (!isCreator) {
-      // FIX: Directly redirect. Do NOT signOut first.
-      // Signing out first was clearing the browser's memory of the redirect attempt.
       const provider = new GoogleAuthProvider();
       await signInWithRedirect(auth, provider);
     } else {
       await signOut(auth);
-      // Page will likely reload or state will update to null -> then Guest timer starts
     }
   };
 
