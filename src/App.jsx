@@ -49,26 +49,38 @@ const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
 
 // 1. Authentication
+// 1. Authentication
   useEffect(() => {
     let isMounted = true;
 
     const initAuth = async () => {
-      // Step A: Check if we are coming back from Google
+      // Check if we are waiting for a redirect
+      const isRedirecting = window.localStorage.getItem('auth_redirect') === 'true';
+
+      // Step A: Attempt to recover the Google Redirect result
       try {
         const result = await getRedirectResult(auth);
         if (result) {
           console.log("Redirect Success! User:", result.user);
-          return; // Stop here, we have a real user!
+          window.localStorage.removeItem('auth_redirect'); // Cleanup
+          return; 
         }
       } catch (error) {
         console.error("Redirect Error:", error);
+        window.localStorage.removeItem('auth_redirect');
       }
 
-      // Step B: If no user exists at all (and no redirect happened), THEN go Guest.
-      // We check isMounted to prevent double-firing in development.
-      if (!auth.currentUser && isMounted) {
-         console.log("No user found, starting Anonymous session...");
+      // Step B: Only go Anonymous if we are NOT waiting for a redirect
+      // If isRedirecting is true, we do NOTHING and let Firebase load the user naturally
+      if (!auth.currentUser && isMounted && !isRedirecting) {
+         console.log("No redirect pending. Starting Anonymous session...");
          await signInAnonymously(auth);
+      }
+      
+      // Cleanup flag if we ran through everything and found nothing
+      if (isRedirecting && !auth.currentUser) {
+          // Wait a tiny bit for Firebase to auto-restore, then clear
+          setTimeout(() => window.localStorage.removeItem('auth_redirect'), 2000);
       }
     };
     
@@ -82,6 +94,7 @@ const ProjectViewer = ({ project, onExit }) => {
       
       if (u && !u.isAnonymous) {
         setIsCreator(true);
+        window.localStorage.removeItem('auth_redirect'); // Ensure flag is gone
       } else {
         setIsCreator(false);
       }
@@ -305,14 +318,17 @@ const toggleLogin = async () => {
     if (!isCreator) {
       const provider = new GoogleAuthProvider();
       
-      // FIX: Force logout first to clear the "Anonymous" session
-      // This ensures the app doesn't get confused by the old user
+      // 1. Set a flag so we know we are expecting a redirect
+      window.localStorage.setItem('auth_redirect', 'true');
+      
+      // 2. Sign out of Guest mode first
       await signOut(auth);
       
       try {
         await signInWithRedirect(auth, provider);
       } catch (error) {
         console.error("Login failed", error);
+        window.localStorage.removeItem('auth_redirect'); // Clear flag on error
       }
     } else {
       await signOut(auth);
