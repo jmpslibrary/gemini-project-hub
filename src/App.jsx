@@ -6,8 +6,8 @@ import {
   signInAnonymously, 
   onAuthStateChanged,
   signOut,
-  GoogleAuthProvider, // Add this
-  signInWithPopup     // Add this
+  GoogleAuthProvider, 
+  signInWithRedirect 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 
 // --- Firebase Setup ---
-// 1. Helper to check if env vars are loaded
 const env = import.meta.env; 
 
 const firebaseConfig = {
@@ -39,8 +38,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-// This ID is used to organize your database. Keep it simple and consistent.
 const appId = 'gemini-project-hub';
 
 // --- Utility ---
@@ -50,33 +47,21 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
 
-// 1. Authentication
+  // FIX: Restored the Iframe logic here (this was missing in your file)
   useEffect(() => {
-    const initAuth = async () => {
-      // Only sign in anonymously if we aren't already logged in
-      // This prevents overwriting a real user session on refresh
-      if (!auth.currentUser) {
-         await signInAnonymously(auth);
-      }
-    };
-    initAuth();
-
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      // FIX: Actually check if the user is a real "Creator" (not anonymous)
-      if (u && !u.isAnonymous) {
-        setIsCreator(true);
-      } else {
-        setIsCreator(false);
-      }
-    });
-  }, []);
+    if (iframeRef.current && project) {
+      const doc = iframeRef.current.contentDocument;
+      doc.open();
+      const script = `<script>window.onerror = function(m){document.body.innerHTML='<div style="color:red;padding:20px;font-family:sans-serif"><h3>Runtime Error</h3>'+m+'</div>'}</script>`;
+      doc.write(script + project.code);
+      doc.close();
+    }
+  }, [project]);
 
   if (!project) return <div className="flex items-center justify-center h-screen text-slate-500">Loading Project...</div>;
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-100 flex flex-col">
-      {/* Browser-style Toolbar */}
       <div className="h-14 bg-white border-b border-slate-200 flex items-center px-4 justify-between shadow-sm shrink-0">
         <div className="flex items-center gap-4">
           <button 
@@ -94,17 +79,12 @@ const ProjectViewer = ({ project, onExit }) => {
             </span>
           </div>
         </div>
-        
-        {/* Fake URL Bar */}
         <div className="hidden md:flex flex-1 max-w-xl mx-8 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 items-center text-xs text-slate-400">
           <Lock className="w-3 h-3 mr-2" />
           hub.netlify.app/project/{project.id}
         </div>
-
-        <div className="w-8" /> {/* Spacer */}
+        <div className="w-8" /> 
       </div>
-
-      {/* Iframe Canvas */}
       <div className="flex-1 bg-slate-200 p-4 overflow-hidden">
         <div className="w-full h-full bg-white rounded-lg shadow-lg overflow-hidden border border-slate-300 relative">
           <iframe 
@@ -201,22 +181,30 @@ export default function ProjectHub() {
   const [view, setView] = useState('list'); 
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isCreator, setIsCreator] = useState(false); // Used to simulate login state
+  const [isCreator, setIsCreator] = useState(false); 
 
-  // 1. Authentication
+  // 1. Authentication (FIX: Moved the correct logic here)
   useEffect(() => {
     const initAuth = async () => {
-      // Preview Env: Always start anonymous to allow reading
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
+      // Only start anonymous session if we aren't already logged in
+      if (!auth.currentUser) {
+         await signInAnonymously(auth);
       }
     };
     initAuth();
+
     return onAuthStateChanged(auth, (u) => {
+      console.log("Auth User Detected:", u);
+      if (u) console.log("Is Anonymous?", u.isAnonymous);
+
       setUser(u);
-      // In real app, check !u.isAnonymous
+      
+      // This logic now correctly updates the UI
+      if (u && !u.isAnonymous) {
+        setIsCreator(true);
+      } else {
+        setIsCreator(false);
+      }
     });
   }, []);
 
@@ -226,7 +214,6 @@ export default function ProjectHub() {
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects');
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Sort new to old
       data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setProjects(data);
     });
@@ -258,16 +245,20 @@ export default function ProjectHub() {
   // Handlers
   const handleUpload = async (title, desc, code) => {
     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects'), {
-      title, description, code: cleanCode(code), authorId: user.uid, createdAt: serverTimestamp()
+      title, 
+      description: desc, // Fixed variable name match
+      code: cleanCode(code), 
+      authorId: user.uid, 
+      createdAt: serverTimestamp()
     });
     navigate('#/');
   };
 
-const toggleLogin = async () => {
+  const toggleLogin = async () => {
     if (!isCreator) {
       const provider = new GoogleAuthProvider();
       try {
-        await signInWithPopup(auth, provider);
+        await signInWithRedirect(auth, provider);
       } catch (error) {
         console.error("Login failed", error);
       }
@@ -286,7 +277,6 @@ const toggleLogin = async () => {
   if (view === 'view' && activeProject) return <ProjectViewer project={activeProject} onExit={() => navigate('#/')} />;
 
   if (view === 'upload') {
-    // Login Gate
     if (!isCreator) {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 p-4">
@@ -311,7 +301,6 @@ const toggleLogin = async () => {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
-      {/* Navbar */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2 cursor-pointer" onClick={() => navigate('#/')}>
@@ -352,9 +341,7 @@ const toggleLogin = async () => {
         </div>
       </nav>
 
-      {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 py-12">
-        {/* Header Section */}
         <div className="mb-10">
           <h1 className="text-3xl font-bold text-slate-900 mb-3">Project Repository</h1>
           <p className="text-slate-500 max-w-2xl">
@@ -363,7 +350,6 @@ const toggleLogin = async () => {
           </p>
         </div>
 
-        {/* Project Grid */}
         {projects.length === 0 ? (
           <div className="border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center bg-slate-50/50">
             <Layout className="w-12 h-12 text-slate-300 mx-auto mb-4" />
@@ -381,7 +367,6 @@ const toggleLogin = async () => {
                 onClick={() => navigate(`#/project/${p.id}`)}
                 className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:shadow-slate-200/50 hover:border-indigo-200 transition-all cursor-pointer flex flex-col h-[280px]"
               >
-                {/* Card Top */}
                 <div className="p-6 flex-1">
                   <div className="flex justify-between items-start mb-4">
                     <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center">
@@ -396,8 +381,6 @@ const toggleLogin = async () => {
                     {p.description}
                   </p>
                 </div>
-
-                {/* Card Bottom */}
                 <div className="px-6 py-4 border-t border-slate-50 bg-slate-50/50 group-hover:bg-white transition-colors flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-400 bg-white border border-slate-200 px-2 py-1 rounded">
                     Web App
