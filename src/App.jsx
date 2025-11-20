@@ -5,7 +5,9 @@ import {
   signInWithCustomToken, 
   signInAnonymously, 
   onAuthStateChanged,
-  signOut
+  signOut,
+  GoogleAuthProvider, // Add this
+  signInWithPopup     // Add this
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -48,15 +50,27 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
 
+// 1. Authentication
   useEffect(() => {
-    if (iframeRef.current && project) {
-      const doc = iframeRef.current.contentDocument;
-      doc.open();
-      const script = `<script>window.onerror = function(m){document.body.innerHTML='<div style="color:red;padding:20px;font-family:sans-serif"><h3>Runtime Error</h3>'+m+'</div>'}</script>`;
-      doc.write(script + project.code);
-      doc.close();
-    }
-  }, [project]);
+    const initAuth = async () => {
+      // Only sign in anonymously if we aren't already logged in
+      // This prevents overwriting a real user session on refresh
+      if (!auth.currentUser) {
+         await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      // FIX: Actually check if the user is a real "Creator" (not anonymous)
+      if (u && !u.isAnonymous) {
+        setIsCreator(true);
+      } else {
+        setIsCreator(false);
+      }
+    });
+  }, []);
 
   if (!project) return <div className="flex items-center justify-center h-screen text-slate-500">Loading Project...</div>;
 
@@ -249,9 +263,17 @@ export default function ProjectHub() {
     navigate('#/');
   };
 
-  const toggleLogin = () => {
-    // In Production: Trigger Google Sign In here
-    setIsCreator(!isCreator);
+const toggleLogin = async () => {
+    if (!isCreator) {
+      const provider = new GoogleAuthProvider();
+      try {
+        await signInWithPopup(auth, provider);
+      } catch (error) {
+        console.error("Login failed", error);
+      }
+    } else {
+      await signOut(auth);
+    }
   };
 
   // Render Logic
