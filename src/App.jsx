@@ -5,18 +5,22 @@ import {
   onAuthStateChanged,
   signOut,
   GoogleAuthProvider, 
-  signInWithPopup // <--- Back to Popup (Works better with Hash Router)
+  signInWithPopup 
 } from 'firebase/auth';
 import { 
   getFirestore, 
   collection, 
   addDoc, 
+  updateDoc,     // <--- NEW
+  deleteDoc,     // <--- NEW
+  doc,           // <--- NEW
   onSnapshot, 
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
   Layout, Plus, Code, ExternalLink, Box, 
-  ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2
+  ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
+  Pencil, Trash2 // <--- NEW ICONS
 } from 'lucide-react';
 
 // --- Firebase Setup ---
@@ -75,11 +79,12 @@ const ProjectViewer = ({ project, onExit }) => {
   );
 };
 
-// --- Component: Upload Form ---
-const UploadForm = ({ onCancel, onSubmit }) => {
-  const [title, setTitle] = useState('');
-  const [desc, setDesc] = useState('');
-  const [code, setCode] = useState('');
+// --- Component: Upload/Edit Form ---
+const UploadForm = ({ initialData, onCancel, onSubmit }) => {
+  // Pre-fill data if editing, otherwise empty
+  const [title, setTitle] = useState(initialData?.title || '');
+  const [desc, setDesc] = useState(initialData?.description || '');
+  const [code, setCode] = useState(initialData?.code || '');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -95,7 +100,9 @@ const UploadForm = ({ onCancel, onSubmit }) => {
       </button>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50">
-          <h2 className="text-xl font-bold text-slate-800">New Project</h2>
+          <h2 className="text-xl font-bold text-slate-800">
+            {initialData ? 'Edit Project' : 'New Project'}
+          </h2>
         </div>
         <form onSubmit={handleSubmit} className="p-8 space-y-6">
           <div>
@@ -113,7 +120,7 @@ const UploadForm = ({ onCancel, onSubmit }) => {
           <div className="pt-4 flex justify-end gap-4">
             <button type="button" onClick={onCancel} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
             <button type="submit" disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg shadow-sm">
-              {loading ? 'Deploying...' : 'Deploy Project'}
+              {loading ? 'Saving...' : (initialData ? 'Update Project' : 'Deploy Project')}
             </button>
           </div>
         </form>
@@ -131,6 +138,9 @@ export default function ProjectHub() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
   const [authLoading, setAuthLoading] = useState(true);
+  
+  // State to hold the project being edited
+  const [editingProject, setEditingProject] = useState(null);
 
   // 1. Authentication 
   useEffect(() => {
@@ -165,31 +175,64 @@ export default function ProjectHub() {
       } else if (h === '#/upload') {
         setView('upload');
         setActiveProjectId(null);
+        // If we just navigated to upload manually, clear any edit state
+        if (editingProject) setEditingProject(null);
       } else {
         setView('list');
         setActiveProjectId(null);
+        setEditingProject(null);
       }
     };
     handleHash();
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
+  }, [editingProject]);
 
   const navigate = (path) => window.location.hash = path;
 
-  const handleUpload = async (title, desc, code) => {
-    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects'), {
-      title, description: desc, code: cleanCode(code), authorId: user.uid, createdAt: serverTimestamp()
-    });
+  // --- ACTIONS ---
+
+  const handleSave = async (title, desc, code) => {
+    if (editingProject) {
+      // UPDATE existing
+      const projectRef = doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', editingProject.id);
+      await updateDoc(projectRef, {
+        title,
+        description: desc,
+        code: cleanCode(code),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      // CREATE new
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects'), {
+        title, 
+        description: desc, 
+        code: cleanCode(code), 
+        authorId: user.uid, 
+        createdAt: serverTimestamp()
+      });
+    }
+    setEditingProject(null);
     navigate('#/');
+  };
+
+  const handleEdit = (project, e) => {
+    e.stopPropagation(); // Don't open the project viewer
+    setEditingProject(project);
+    navigate('#/upload');
+  };
+
+  const handleDelete = async (projectId, e) => {
+    e.stopPropagation(); // Don't open the project viewer
+    if (window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', projectId));
+    }
   };
 
   const toggleLogin = async () => {
     if (!isCreator) {
       const provider = new GoogleAuthProvider();
       try {
-        // POPUP IS BACK!
-        // It works now because we removed the "Anonymous" user logic that was breaking it.
         await signInWithPopup(auth, provider);
       } catch (error) {
         console.error("Login failed", error);
@@ -199,7 +242,7 @@ export default function ProjectHub() {
     }
   };
 
-  // View Logic
+  // --- VIEW LOGIC ---
   const activeProject = projects.find(p => p.id === activeProjectId);
   const filteredProjects = projects.filter(p => p.title.toLowerCase().includes(searchTerm.toLowerCase()) || p.description.toLowerCase().includes(searchTerm.toLowerCase()));
 
@@ -228,7 +271,8 @@ export default function ProjectHub() {
         </div>
       );
     }
-    return <UploadForm onCancel={() => navigate('#/')} onSubmit={handleUpload} />;
+    // Pass editingProject as initialData (if null, form is empty)
+    return <UploadForm initialData={editingProject} onCancel={() => navigate('#/')} onSubmit={handleSave} />;
   }
 
   return (
@@ -249,7 +293,7 @@ export default function ProjectHub() {
               {isCreator ? <User className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
               <span className="hidden sm:inline">{isCreator ? 'Creator' : 'Guest'}</span>
             </button>
-            <button onClick={() => navigate('#/upload')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-md shadow-slate-200"><Plus className="w-4 h-4" /> New Project</button>
+            <button onClick={() => { setEditingProject(null); navigate('#/upload'); }} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-md shadow-slate-200"><Plus className="w-4 h-4" /> New Project</button>
           </div>
         </div>
       </nav>
@@ -262,12 +306,34 @@ export default function ProjectHub() {
           <div className="border-2 border-dashed border-slate-200 rounded-2xl p-12 text-center bg-slate-50/50">
             <Layout className="w-12 h-12 text-slate-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-slate-900">No projects yet</h3>
-            <button onClick={() => navigate('#/upload')} className="text-indigo-600 font-medium hover:underline">Upload Project</button>
+            <button onClick={() => { setEditingProject(null); navigate('#/upload'); }} className="text-indigo-600 font-medium hover:underline">Upload Project</button>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredProjects.map(p => (
-              <div key={p.id} onClick={() => navigate(`#/project/${p.id}`)} className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:shadow-slate-200/50 hover:border-indigo-200 transition-all cursor-pointer flex flex-col h-[280px]">
+              <div key={p.id} onClick={() => navigate(`#/project/${p.id}`)} className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:shadow-slate-200/50 hover:border-indigo-200 transition-all cursor-pointer flex flex-col h-[280px] relative">
+                
+                {/* --- CREATOR ACTIONS (EDIT / DELETE) --- */}
+                {isCreator && (
+                  <div className="absolute top-3 right-3 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={(e) => handleEdit(p, e)}
+                      className="p-2 bg-white text-slate-500 hover:text-indigo-600 border border-slate-200 rounded-full shadow-sm hover:shadow-md transition-all"
+                      title="Edit Project"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button 
+                      onClick={(e) => handleDelete(p.id, e)}
+                      className="p-2 bg-white text-slate-500 hover:text-red-600 border border-slate-200 rounded-full shadow-sm hover:shadow-md transition-all"
+                      title="Delete Project"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                {/* --------------------------------------- */}
+
                 <div className="p-6 flex-1">
                   <div className="flex justify-between items-start mb-4">
                     <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><Code className="w-5 h-5" /></div>
