@@ -19,7 +19,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
-  Plus, Code, ExternalLink, Box, 
+  Plus, Code, ExternalLink, Box, Layout, // <--- Added Layout back here
   ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
   Pencil, Trash2, GripVertical, Check 
 } from 'lucide-react';
@@ -65,8 +65,6 @@ const ProjectViewer = ({ project, onExit }) => {
     return cleaned;
   };
 
-  // We generate the HTML string using useMemo so it updates when the project code changes.
-  // We then pass this string directly to the iframe's srcDoc attribute.
   const htmlContent = useMemo(() => {
     if (!project) return '';
     
@@ -101,7 +99,6 @@ const ProjectViewer = ({ project, onExit }) => {
             import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
             import { createRoot } from 'react-dom/client';
 
-            // Error Handling
             window.onerror = function(message, source, lineno, colno, error) {
               document.body.innerHTML = '<div style="color:#ef4444; padding:20px; font-family: sans-serif;">' + 
                 '<h2 style="font-weight:bold; margin-bottom:10px;">Runtime Error</h2>' + 
@@ -109,14 +106,12 @@ const ProjectViewer = ({ project, onExit }) => {
                 '</div>';
             };
 
-            // Inject User Code
             try {
               ${safeUserCode}
             } catch (err) {
               console.error("Parsing Error:", err);
             }
 
-            // Mount Logic
             const root = createRoot(document.getElementById('root'));
             
             try {
@@ -163,7 +158,6 @@ const ProjectViewer = ({ project, onExit }) => {
       </div>
       <div className="flex-1 bg-slate-200 p-4 overflow-hidden">
         <div className="w-full h-full bg-white rounded-lg shadow-lg overflow-hidden border border-slate-300 relative">
-          {/* FIX: Use srcDoc instead of manual writing. This avoids the security crash. */}
           <iframe 
             title="Project View" 
             srcDoc={htmlContent}
