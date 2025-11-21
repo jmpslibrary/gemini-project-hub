@@ -13,7 +13,7 @@ import {
   addDoc, 
   updateDoc, 
   deleteDoc, 
-  writeBatch, // <--- NEW: Needed for batch updating order
+  writeBatch, 
   doc, 
   onSnapshot, 
   serverTimestamp 
@@ -21,7 +21,7 @@ import {
 import { 
   Layout, Plus, Code, ExternalLink, Box, 
   ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
-  Pencil, Trash2, GripVertical, Check // <--- NEW ICONS
+  Pencil, Trash2, GripVertical, Check 
 } from 'lucide-react';
 
 // --- Firebase Setup ---
@@ -41,7 +41,6 @@ const db = getFirestore(app);
 const appId = 'gemini-project-hub';
 
 // --- Configuration ---
-// Define available accent colors
 const COLORS = {
   indigo: { name: 'Indigo', bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200', hover: 'hover:border-indigo-300', shadow: 'hover:shadow-indigo-200/50', ring: 'ring-indigo-500' },
   emerald: { name: 'Emerald', bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200', hover: 'hover:border-emerald-300', shadow: 'hover:shadow-emerald-200/50', ring: 'ring-emerald-500' },
@@ -93,13 +92,14 @@ const ProjectViewer = ({ project, onExit }) => {
 
 // --- Component: Upload/Edit Form ---
 const UploadForm = ({ initialData, onCancel, onSubmit }) => {
-  const [title, setTitle] = useState('');
-  const [desc, setDesc] = useState('');
-  const [code, setCode] = useState('');
-  const [color, setColor] = useState('indigo'); // Default color
+  // FIX 1: Initialize state directly from initialData to prevent "Empty Flash"
+  const [title, setTitle] = useState(initialData?.title || '');
+  const [desc, setDesc] = useState(initialData?.description || '');
+  const [code, setCode] = useState(initialData?.code || '');
+  const [color, setColor] = useState(initialData?.color || 'indigo');
   const [loading, setLoading] = useState(false);
 
-  // FIX: Ensure form populates when initialData changes (switching between Edit/New)
+  // Also keep the useEffect to handle switching between "New" and "Edit" while mounted
   useEffect(() => {
     if (initialData) {
       setTitle(initialData.title || '');
@@ -107,7 +107,6 @@ const UploadForm = ({ initialData, onCancel, onSubmit }) => {
       setCode(initialData.code || '');
       setColor(initialData.color || 'indigo');
     } else {
-      // Reset if "New Project"
       setTitle('');
       setDesc('');
       setCode('');
@@ -228,11 +227,15 @@ export default function ProjectHub() {
       if (h.startsWith('#/project/')) {
         setActiveProjectId(h.replace('#/project/', ''));
         setView('view');
+        // Clear edit state if we go to view mode
+        setEditingProject(null);
       } else if (h === '#/upload') {
         setView('upload');
         setActiveProjectId(null);
-        if (editingProject) setEditingProject(null);
+        // FIX 2: Do NOT clear editingProject here. 
+        // If we navigated via the Edit button, we need to keep it!
       } else {
+        // List view (Home)
         setView('list');
         setActiveProjectId(null);
         setEditingProject(null);
@@ -241,7 +244,7 @@ export default function ProjectHub() {
     handleHash();
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, [editingProject]);
+  }, []); // Dependency array empty to avoid fighting with state updates
 
   const navigate = (path) => window.location.hash = path;
 
@@ -292,44 +295,31 @@ export default function ProjectHub() {
   const handleDragStart = (e, index) => {
     setDraggedItem(projects[index]);
     e.dataTransfer.effectAllowed = "move";
-    // Hide the ghost image a bit or style it if desired
     e.dataTransfer.setDragImage(e.target.parentNode, 20, 20);
   };
 
   const handleDragOver = (e, index) => {
     e.preventDefault();
     const draggedOverItem = projects[index];
-
-    // If the item is dragged over itself, ignore
     if (draggedItem === draggedOverItem) return;
-
-    // Filter out the dragged item
     let items = projects.filter(item => item !== draggedItem);
-
-    // Add the dragged item at the new position
     items.splice(index, 0, draggedItem);
-
     setProjects(items);
   };
 
   const handleDragEnd = async () => {
     setDraggedItem(null);
-    
-    // Batch update Firestore with new orderIndices
     const batch = writeBatch(db);
     projects.forEach((proj, index) => {
         const ref = doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', proj.id);
         batch.update(ref, { orderIndex: index });
     });
-    
     try {
         await batch.commit();
-        console.log("Order saved!");
     } catch (err) {
         console.error("Failed to save order", err);
     }
   };
-
 
   const toggleLogin = async () => {
     if (!isCreator) {
@@ -454,7 +444,6 @@ export default function ProjectHub() {
                     </button>
                   </div>
                 )}
-                {/* ----------------------- */}
 
                 <div className="p-6 flex-1">
                   <div className="flex justify-between items-start mb-4">
