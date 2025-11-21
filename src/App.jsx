@@ -19,7 +19,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
-  Plus, Code, ExternalLink, Box, Layout, // <--- Added Layout back here
+  Plus, Code, ExternalLink, Box, Layout,
   ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
   Pencil, Trash2, GripVertical, Check 
 } from 'lucide-react';
@@ -53,7 +53,7 @@ const COLORS = {
 // --- Utility ---
 const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, '').trim();
 
-// --- Component: Project Viewer (Live React Renderer) ---
+// --- Component: Project Viewer (Smart Renderer) ---
 const ProjectViewer = ({ project, onExit }) => {
   
   // Helper to strip conflicting imports
@@ -68,6 +68,13 @@ const ProjectViewer = ({ project, onExit }) => {
   const htmlContent = useMemo(() => {
     if (!project) return '';
     
+    // 1. DETECT HTML PROJECTS
+    // If code starts with "<", assume it is raw HTML/JS and render directly.
+    if (project.code.trim().startsWith('<')) {
+      return project.code;
+    }
+
+    // 2. RENDER REACT PROJECTS
     const safeUserCode = cleanUserCode(project.code);
 
     return `
@@ -106,12 +113,10 @@ const ProjectViewer = ({ project, onExit }) => {
                 '</div>';
             };
 
-            try {
-              ${safeUserCode}
-            } catch (err) {
-              console.error("Parsing Error:", err);
-            }
+            // --- INJECT USER CODE (Top Level) ---
+            ${safeUserCode}
 
+            // --- MOUNT LOGIC ---
             const root = createRoot(document.getElementById('root'));
             
             try {
