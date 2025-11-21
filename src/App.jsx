@@ -53,26 +53,35 @@ const COLORS = {
 // --- Utility ---
 const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, '').trim();
 
-// --- Component: Project Viewer ---
 // --- Component: Project Viewer (Live React Renderer) ---
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
+
+  // Helper to strip conflicting imports from user code
+  const cleanUserCode = (rawCode) => {
+    if (!rawCode) return '';
+    // 1. Remove "import ... from 'react'" (multiline safe)
+    let cleaned = rawCode.replace(/import\s+[\s\S]*?from\s+['"]react['"];?/gi, '// React import removed by system');
+    // 2. Remove "import ... from 'react-dom'" if present
+    cleaned = cleaned.replace(/import\s+[\s\S]*?from\s+['"]react-dom\/client['"];?/gi, '');
+    cleaned = cleaned.replace(/import\s+[\s\S]*?from\s+['"]react-dom['"];?/gi, '');
+    return cleaned;
+  };
 
   useEffect(() => {
     if (iframeRef.current && project) {
       const doc = iframeRef.current.contentDocument;
       
-      // We construct a full HTML document that pulls in React, ReactDOM, and Tailwind
-      // from CDNs so the browser can "compile" the user's code on the fly.
+      // Strip conflicting imports before injection
+      const safeUserCode = cleanUserCode(project.code);
+
       const htmlContent = `
         <!DOCTYPE html>
         <html>
           <head>
             <meta charset="UTF-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            
             <script src="https://cdn.tailwindcss.com"></script>
-            
             <script type="importmap">
               {
                 "imports": {
@@ -82,9 +91,7 @@ const ProjectViewer = ({ project, onExit }) => {
                 }
               }
             </script>
-            
             <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-            
             <style>
               body { background-color: white; height: 100vh; margin: 0; }
               #root { height: 100%; }
@@ -94,11 +101,11 @@ const ProjectViewer = ({ project, onExit }) => {
             <div id="root"></div>
 
             <script type="text/babel" data-type="module">
-              import React, { useState, useEffect, useRef } from 'react';
+              // 1. System Imports (The Source of Truth)
+              import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
               import { createRoot } from 'react-dom/client';
-              import * as Lucide from 'lucide-react';
 
-              // Error Boundary
+              // 2. Error Handling
               window.onerror = function(message, source, lineno, colno, error) {
                 document.body.innerHTML = '<div style="color:#ef4444; padding:20px; font-family: sans-serif;">' + 
                   '<h2 style="font-weight:bold; margin-bottom:10px;">Runtime Error</h2>' + 
@@ -106,14 +113,14 @@ const ProjectViewer = ({ project, onExit }) => {
                   '</div>';
               };
 
-              // --- INJECT USER CODE HERE ---
-              // We wrap this to prevent "Duplicate Identifier" errors if you import React twice
-              ${project.code} 
+              // 3. Inject User Code (Imports stripped)
+              try {
+                ${safeUserCode}
+              } catch (err) {
+                console.error("Parsing Error:", err);
+              }
 
-              // --- MOUNTING LOGIC ---
-              // We try to find the main component to render.
-              // We look for common names used in Gemini outputs.
-              
+              // 4. Mount Logic
               const root = createRoot(document.getElementById('root'));
               
               try {
@@ -124,17 +131,17 @@ const ProjectViewer = ({ project, onExit }) => {
                 else if (typeof MainHub !== 'undefined') ComponentToRender = MainHub;
                 else if (typeof ProjectHub !== 'undefined') ComponentToRender = ProjectHub;
                 else if (typeof Game !== 'undefined') ComponentToRender = Game;
-                // Fallback: Check if there is a default export (rare in this context but possible)
+                else if (typeof Dashboard !== 'undefined') ComponentToRender = Dashboard;
                 
                 if (ComponentToRender) {
                   root.render(<ComponentToRender />);
                 } else {
-                  throw new Error("Could not find a main component. Please name your main component 'App', 'MainHub', or 'ProjectHub'.");
+                  throw new Error("Could not find main component. Please name it 'App', 'MainHub', or 'Game'.");
                 }
               } catch (e) {
                 console.error(e);
                 document.body.innerHTML = '<div style="color:orange; padding:20px; font-family: sans-serif;">' + 
-                  '<h3>Could not mount app</h3>' + 
+                  '<h3>Mounting Error</h3>' + 
                   '<p>' + e.message + '</p>' + 
                   '</div>';
               }
@@ -166,7 +173,13 @@ const ProjectViewer = ({ project, onExit }) => {
       </div>
       <div className="flex-1 bg-slate-200 p-4 overflow-hidden">
         <div className="w-full h-full bg-white rounded-lg shadow-lg overflow-hidden border border-slate-300 relative">
-          <iframe ref={iframeRef} title="Project View" className="w-full h-full border-0" sandbox="allow-scripts allow-modals allow-forms allow-popups allow-same-origin" />
+          {/* Removed allow-same-origin to fix console security warning */}
+          <iframe 
+            ref={iframeRef} 
+            title="Project View" 
+            className="w-full h-full border-0" 
+            sandbox="allow-scripts allow-modals allow-forms allow-popups" 
+          />
         </div>
       </div>
     </div>
