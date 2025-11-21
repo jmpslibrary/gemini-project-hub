@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -19,7 +19,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
-  Layout, Plus, Code, ExternalLink, Box, 
+  Plus, Code, ExternalLink, Box, 
   ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
   Pencil, Trash2, GripVertical, Check 
 } from 'lucide-react';
@@ -55,105 +55,95 @@ const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, 
 
 // --- Component: Project Viewer (Live React Renderer) ---
 const ProjectViewer = ({ project, onExit }) => {
-  const iframeRef = useRef(null);
-
-  // Helper to strip conflicting imports from user code
+  
+  // Helper to strip conflicting imports
   const cleanUserCode = (rawCode) => {
     if (!rawCode) return '';
-    // 1. Remove "import ... from 'react'" (multiline safe)
     let cleaned = rawCode.replace(/import\s+[\s\S]*?from\s+['"]react['"];?/gi, '// React import removed by system');
-    // 2. Remove "import ... from 'react-dom'" if present
     cleaned = cleaned.replace(/import\s+[\s\S]*?from\s+['"]react-dom\/client['"];?/gi, '');
     cleaned = cleaned.replace(/import\s+[\s\S]*?from\s+['"]react-dom['"];?/gi, '');
     return cleaned;
   };
 
-  useEffect(() => {
-    if (iframeRef.current && project) {
-      const doc = iframeRef.current.contentDocument;
-      
-      // Strip conflicting imports before injection
-      const safeUserCode = cleanUserCode(project.code);
+  // We generate the HTML string using useMemo so it updates when the project code changes.
+  // We then pass this string directly to the iframe's srcDoc attribute.
+  const htmlContent = useMemo(() => {
+    if (!project) return '';
+    
+    const safeUserCode = cleanUserCode(project.code);
 
-      const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <script src="https://cdn.tailwindcss.com"></script>
-            <script type="importmap">
-              {
-                "imports": {
-                  "react": "https://esm.sh/react@18.2.0",
-                  "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-                  "lucide-react": "https://esm.sh/lucide-react@0.263.1"
-                }
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <script src="https://cdn.tailwindcss.com"></script>
+          <script type="importmap">
+            {
+              "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "lucide-react": "https://esm.sh/lucide-react@0.263.1"
               }
-            </script>
-            <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-            <style>
-              body { background-color: white; height: 100vh; margin: 0; }
-              #root { height: 100%; }
-            </style>
-          </head>
-          <body>
-            <div id="root"></div>
+            }
+          </script>
+          <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+          <style>
+            body { background-color: white; height: 100vh; margin: 0; }
+            #root { height: 100%; }
+          </style>
+        </head>
+        <body>
+          <div id="root"></div>
 
-            <script type="text/babel" data-type="module">
-              // 1. System Imports (The Source of Truth)
-              import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-              import { createRoot } from 'react-dom/client';
+          <script type="text/babel" data-type="module">
+            import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+            import { createRoot } from 'react-dom/client';
 
-              // 2. Error Handling
-              window.onerror = function(message, source, lineno, colno, error) {
-                document.body.innerHTML = '<div style="color:#ef4444; padding:20px; font-family: sans-serif;">' + 
-                  '<h2 style="font-weight:bold; margin-bottom:10px;">Runtime Error</h2>' + 
-                  '<pre style="white-space: pre-wrap;">' + message + '</pre>' + 
-                  '</div>';
-              };
+            // Error Handling
+            window.onerror = function(message, source, lineno, colno, error) {
+              document.body.innerHTML = '<div style="color:#ef4444; padding:20px; font-family: sans-serif;">' + 
+                '<h2 style="font-weight:bold; margin-bottom:10px;">Runtime Error</h2>' + 
+                '<pre style="white-space: pre-wrap;">' + message + '</pre>' + 
+                '</div>';
+            };
 
-              // 3. Inject User Code (Imports stripped)
-              try {
-                ${safeUserCode}
-              } catch (err) {
-                console.error("Parsing Error:", err);
-              }
+            // Inject User Code
+            try {
+              ${safeUserCode}
+            } catch (err) {
+              console.error("Parsing Error:", err);
+            }
 
-              // 4. Mount Logic
-              const root = createRoot(document.getElementById('root'));
+            // Mount Logic
+            const root = createRoot(document.getElementById('root'));
+            
+            try {
+              let ComponentToRender = null;
               
-              try {
-                let ComponentToRender = null;
-                
-                // Heuristics to find the component
-                if (typeof App !== 'undefined') ComponentToRender = App;
-                else if (typeof MainHub !== 'undefined') ComponentToRender = MainHub;
-                else if (typeof ProjectHub !== 'undefined') ComponentToRender = ProjectHub;
-                else if (typeof Game !== 'undefined') ComponentToRender = Game;
-                else if (typeof Dashboard !== 'undefined') ComponentToRender = Dashboard;
-                
-                if (ComponentToRender) {
-                  root.render(<ComponentToRender />);
-                } else {
-                  throw new Error("Could not find main component. Please name it 'App', 'MainHub', or 'Game'.");
-                }
-              } catch (e) {
-                console.error(e);
-                document.body.innerHTML = '<div style="color:orange; padding:20px; font-family: sans-serif;">' + 
-                  '<h3>Mounting Error</h3>' + 
-                  '<p>' + e.message + '</p>' + 
-                  '</div>';
+              if (typeof App !== 'undefined') ComponentToRender = App;
+              else if (typeof MainHub !== 'undefined') ComponentToRender = MainHub;
+              else if (typeof ProjectHub !== 'undefined') ComponentToRender = ProjectHub;
+              else if (typeof Game !== 'undefined') ComponentToRender = Game;
+              else if (typeof Dashboard !== 'undefined') ComponentToRender = Dashboard;
+              
+              if (ComponentToRender) {
+                root.render(<ComponentToRender />);
+              } else {
+                throw new Error("Could not find main component. Please name it 'App', 'MainHub', or 'Game'.");
               }
-            </script>
-          </body>
-        </html>
-      `;
-
-      doc.open();
-      doc.write(htmlContent);
-      doc.close();
-    }
+            } catch (e) {
+              console.error(e);
+              document.body.innerHTML = '<div style="color:orange; padding:20px; font-family: sans-serif;">' + 
+                '<h3>Mounting Error</h3>' + 
+                '<p>' + e.message + '</p>' + 
+                '</div>';
+            }
+          </script>
+        </body>
+      </html>
+    `;
   }, [project]);
 
   if (!project) return <div className="flex items-center justify-center h-screen text-slate-500">Loading Project...</div>;
@@ -173,10 +163,10 @@ const ProjectViewer = ({ project, onExit }) => {
       </div>
       <div className="flex-1 bg-slate-200 p-4 overflow-hidden">
         <div className="w-full h-full bg-white rounded-lg shadow-lg overflow-hidden border border-slate-300 relative">
-          {/* Removed allow-same-origin to fix console security warning */}
+          {/* FIX: Use srcDoc instead of manual writing. This avoids the security crash. */}
           <iframe 
-            ref={iframeRef} 
             title="Project View" 
+            srcDoc={htmlContent}
             className="w-full h-full border-0" 
             sandbox="allow-scripts allow-modals allow-forms allow-popups" 
           />
@@ -188,14 +178,12 @@ const ProjectViewer = ({ project, onExit }) => {
 
 // --- Component: Upload/Edit Form ---
 const UploadForm = ({ initialData, onCancel, onSubmit }) => {
-  // FIX 1: Initialize state directly from initialData to prevent "Empty Flash"
   const [title, setTitle] = useState(initialData?.title || '');
   const [desc, setDesc] = useState(initialData?.description || '');
   const [code, setCode] = useState(initialData?.code || '');
   const [color, setColor] = useState(initialData?.color || 'indigo');
   const [loading, setLoading] = useState(false);
 
-  // Also keep the useEffect to handle switching between "New" and "Edit" while mounted
   useEffect(() => {
     if (initialData) {
       setTitle(initialData.title || '');
@@ -323,15 +311,11 @@ export default function ProjectHub() {
       if (h.startsWith('#/project/')) {
         setActiveProjectId(h.replace('#/project/', ''));
         setView('view');
-        // Clear edit state if we go to view mode
         setEditingProject(null);
       } else if (h === '#/upload') {
         setView('upload');
         setActiveProjectId(null);
-        // FIX 2: Do NOT clear editingProject here. 
-        // If we navigated via the Edit button, we need to keep it!
       } else {
-        // List view (Home)
         setView('list');
         setActiveProjectId(null);
         setEditingProject(null);
@@ -340,7 +324,7 @@ export default function ProjectHub() {
     handleHash();
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []); // Dependency array empty to avoid fighting with state updates
+  }, []); 
 
   const navigate = (path) => window.location.hash = path;
 
