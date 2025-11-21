@@ -54,14 +54,97 @@ const COLORS = {
 const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, '').trim();
 
 // --- Component: Project Viewer ---
+// --- Component: Project Viewer (Live React Renderer) ---
 const ProjectViewer = ({ project, onExit }) => {
   const iframeRef = useRef(null);
+
   useEffect(() => {
     if (iframeRef.current && project) {
       const doc = iframeRef.current.contentDocument;
+      
+      // We construct a full HTML document that pulls in React, ReactDOM, and Tailwind
+      // from CDNs so the browser can "compile" the user's code on the fly.
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            
+            <script src="https://cdn.tailwindcss.com"></script>
+            
+            <script type="importmap">
+              {
+                "imports": {
+                  "react": "https://esm.sh/react@18.2.0",
+                  "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                  "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+                }
+              }
+            </script>
+            
+            <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+            
+            <style>
+              body { background-color: white; height: 100vh; margin: 0; }
+              #root { height: 100%; }
+            </style>
+          </head>
+          <body>
+            <div id="root"></div>
+
+            <script type="text/babel" data-type="module">
+              import React, { useState, useEffect, useRef } from 'react';
+              import { createRoot } from 'react-dom/client';
+              import * as Lucide from 'lucide-react';
+
+              // Error Boundary
+              window.onerror = function(message, source, lineno, colno, error) {
+                document.body.innerHTML = '<div style="color:#ef4444; padding:20px; font-family: sans-serif;">' + 
+                  '<h2 style="font-weight:bold; margin-bottom:10px;">Runtime Error</h2>' + 
+                  '<pre style="white-space: pre-wrap;">' + message + '</pre>' + 
+                  '</div>';
+              };
+
+              // --- INJECT USER CODE HERE ---
+              // We wrap this to prevent "Duplicate Identifier" errors if you import React twice
+              ${project.code} 
+
+              // --- MOUNTING LOGIC ---
+              // We try to find the main component to render.
+              // We look for common names used in Gemini outputs.
+              
+              const root = createRoot(document.getElementById('root'));
+              
+              try {
+                let ComponentToRender = null;
+                
+                // Heuristics to find the component
+                if (typeof App !== 'undefined') ComponentToRender = App;
+                else if (typeof MainHub !== 'undefined') ComponentToRender = MainHub;
+                else if (typeof ProjectHub !== 'undefined') ComponentToRender = ProjectHub;
+                else if (typeof Game !== 'undefined') ComponentToRender = Game;
+                // Fallback: Check if there is a default export (rare in this context but possible)
+                
+                if (ComponentToRender) {
+                  root.render(<ComponentToRender />);
+                } else {
+                  throw new Error("Could not find a main component. Please name your main component 'App', 'MainHub', or 'ProjectHub'.");
+                }
+              } catch (e) {
+                console.error(e);
+                document.body.innerHTML = '<div style="color:orange; padding:20px; font-family: sans-serif;">' + 
+                  '<h3>Could not mount app</h3>' + 
+                  '<p>' + e.message + '</p>' + 
+                  '</div>';
+              }
+            </script>
+          </body>
+        </html>
+      `;
+
       doc.open();
-      const script = `<script>window.onerror = function(m){document.body.innerHTML='<div style="color:red;padding:20px;font-family:sans-serif"><h3>Runtime Error</h3>'+m+'</div>'}</script>`;
-      doc.write(script + project.code);
+      doc.write(htmlContent);
       doc.close();
     }
   }, [project]);
