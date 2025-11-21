@@ -11,16 +11,17 @@ import {
   getFirestore, 
   collection, 
   addDoc, 
-  updateDoc,     // <--- NEW
-  deleteDoc,     // <--- NEW
-  doc,           // <--- NEW
+  updateDoc, 
+  deleteDoc, 
+  writeBatch, // <--- NEW: Needed for batch updating order
+  doc, 
   onSnapshot, 
   serverTimestamp 
 } from 'firebase/firestore';
 import { 
   Layout, Plus, Code, ExternalLink, Box, 
   ArrowLeft, Lock, User, LogOut, Globe, Search, Loader2,
-  Pencil, Trash2 // <--- NEW ICONS
+  Pencil, Trash2, GripVertical, Check // <--- NEW ICONS
 } from 'lucide-react';
 
 // --- Firebase Setup ---
@@ -38,6 +39,17 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const appId = 'gemini-project-hub';
+
+// --- Configuration ---
+// Define available accent colors
+const COLORS = {
+  indigo: { name: 'Indigo', bg: 'bg-indigo-50', text: 'text-indigo-600', border: 'border-indigo-200', hover: 'hover:border-indigo-300', shadow: 'hover:shadow-indigo-200/50', ring: 'ring-indigo-500' },
+  emerald: { name: 'Emerald', bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-200', hover: 'hover:border-emerald-300', shadow: 'hover:shadow-emerald-200/50', ring: 'ring-emerald-500' },
+  amber:   { name: 'Amber',   bg: 'bg-amber-50',   text: 'text-amber-600',   border: 'border-amber-200',   hover: 'hover:border-amber-300',   shadow: 'hover:shadow-amber-200/50',   ring: 'ring-amber-500' },
+  rose:    { name: 'Rose',    bg: 'bg-rose-50',    text: 'text-rose-600',    border: 'border-rose-200',    hover: 'hover:border-rose-300',    shadow: 'hover:shadow-rose-200/50',    ring: 'ring-rose-500' },
+  cyan:    { name: 'Cyan',    bg: 'bg-cyan-50',    text: 'text-cyan-600',    border: 'border-cyan-200',    hover: 'hover:border-cyan-300',    shadow: 'hover:shadow-cyan-200/50',    ring: 'ring-cyan-500' },
+  purple:  { name: 'Purple',  bg: 'bg-purple-50',  text: 'text-purple-600',  border: 'border-purple-200',  hover: 'hover:border-purple-300',  shadow: 'hover:shadow-purple-200/50',  ring: 'ring-purple-500' },
+};
 
 // --- Utility ---
 const cleanCode = (input) => input.replace(/^```[a-z]*\n/i, '').replace(/```$/, '').trim();
@@ -81,16 +93,32 @@ const ProjectViewer = ({ project, onExit }) => {
 
 // --- Component: Upload/Edit Form ---
 const UploadForm = ({ initialData, onCancel, onSubmit }) => {
-  // Pre-fill data if editing, otherwise empty
-  const [title, setTitle] = useState(initialData?.title || '');
-  const [desc, setDesc] = useState(initialData?.description || '');
-  const [code, setCode] = useState(initialData?.code || '');
+  const [title, setTitle] = useState('');
+  const [desc, setDesc] = useState('');
+  const [code, setCode] = useState('');
+  const [color, setColor] = useState('indigo'); // Default color
   const [loading, setLoading] = useState(false);
+
+  // FIX: Ensure form populates when initialData changes (switching between Edit/New)
+  useEffect(() => {
+    if (initialData) {
+      setTitle(initialData.title || '');
+      setDesc(initialData.description || '');
+      setCode(initialData.code || '');
+      setColor(initialData.color || 'indigo');
+    } else {
+      // Reset if "New Project"
+      setTitle('');
+      setDesc('');
+      setCode('');
+      setColor('indigo');
+    }
+  }, [initialData]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    await onSubmit(title, desc, code);
+    await onSubmit(title, desc, code, color);
   };
 
   return (
@@ -113,6 +141,25 @@ const UploadForm = ({ initialData, onCancel, onSubmit }) => {
             <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
             <textarea required value={desc} onChange={e => setDesc(e.target.value)} className="w-full border-slate-300 rounded-lg shadow-sm px-4 py-2.5 border outline-none h-24 resize-none" />
           </div>
+          
+          {/* Color Picker */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-2">Accent Color</label>
+            <div className="flex gap-3">
+              {Object.entries(COLORS).map(([key, val]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setColor(key)}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${val.bg} ${color === key ? `ring-2 ring-offset-2 ${val.ring}` : 'hover:scale-110'}`}
+                  title={val.name}
+                >
+                  {color === key && <Check className={`w-4 h-4 ${val.text}`} />}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Source Code</label>
             <textarea required value={code} onChange={e => setCode(e.target.value)} className="w-full bg-slate-900 text-slate-300 font-mono text-xs rounded-lg p-4 border border-slate-800 h-64" spellCheck="false" />
@@ -138,9 +185,10 @@ export default function ProjectHub() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreator, setIsCreator] = useState(false); 
   const [authLoading, setAuthLoading] = useState(true);
-  
-  // State to hold the project being edited
   const [editingProject, setEditingProject] = useState(null);
+
+  // Drag and Drop State
+  const [draggedItem, setDraggedItem] = useState(null);
 
   // 1. Authentication 
   useEffect(() => {
@@ -152,12 +200,20 @@ export default function ProjectHub() {
     return () => unsub();
   }, []);
 
-  // 2. Data Sync
+  // 2. Data Sync (Sort by orderIndex)
   useEffect(() => {
     const q = collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects');
     const unsub = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      
+      // Sort by orderIndex (ascending), fallback to createdAt
+      data.sort((a, b) => {
+        if (a.orderIndex !== undefined && b.orderIndex !== undefined) {
+          return a.orderIndex - b.orderIndex;
+        }
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+      });
+      
       setProjects(data);
     }, (error) => {
        console.log("DB Error:", error.message);
@@ -175,7 +231,6 @@ export default function ProjectHub() {
       } else if (h === '#/upload') {
         setView('upload');
         setActiveProjectId(null);
-        // If we just navigated to upload manually, clear any edit state
         if (editingProject) setEditingProject(null);
       } else {
         setView('list');
@@ -192,22 +247,26 @@ export default function ProjectHub() {
 
   // --- ACTIONS ---
 
-  const handleSave = async (title, desc, code) => {
+  const handleSave = async (title, desc, code, color) => {
     if (editingProject) {
-      // UPDATE existing
+      // UPDATE
       const projectRef = doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', editingProject.id);
       await updateDoc(projectRef, {
         title,
         description: desc,
         code: cleanCode(code),
+        color,
         updatedAt: serverTimestamp()
       });
     } else {
-      // CREATE new
+      // CREATE (Put at end of list)
+      const newOrderIndex = projects.length; 
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'hub_projects'), {
         title, 
         description: desc, 
         code: cleanCode(code), 
+        color,
+        orderIndex: newOrderIndex,
         authorId: user.uid, 
         createdAt: serverTimestamp()
       });
@@ -217,25 +276,70 @@ export default function ProjectHub() {
   };
 
   const handleEdit = (project, e) => {
-    e.stopPropagation(); // Don't open the project viewer
+    e.stopPropagation();
     setEditingProject(project);
     navigate('#/upload');
   };
 
   const handleDelete = async (projectId, e) => {
-    e.stopPropagation(); // Don't open the project viewer
-    if (window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+    e.stopPropagation();
+    if (window.confirm("Are you sure?")) {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', projectId));
     }
   };
 
+  // --- DRAG AND DROP LOGIC ---
+  const handleDragStart = (e, index) => {
+    setDraggedItem(projects[index]);
+    e.dataTransfer.effectAllowed = "move";
+    // Hide the ghost image a bit or style it if desired
+    e.dataTransfer.setDragImage(e.target.parentNode, 20, 20);
+  };
+
+  const handleDragOver = (e, index) => {
+    e.preventDefault();
+    const draggedOverItem = projects[index];
+
+    // If the item is dragged over itself, ignore
+    if (draggedItem === draggedOverItem) return;
+
+    // Filter out the dragged item
+    let items = projects.filter(item => item !== draggedItem);
+
+    // Add the dragged item at the new position
+    items.splice(index, 0, draggedItem);
+
+    setProjects(items);
+  };
+
+  const handleDragEnd = async () => {
+    setDraggedItem(null);
+    
+    // Batch update Firestore with new orderIndices
+    const batch = writeBatch(db);
+    projects.forEach((proj, index) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'hub_projects', proj.id);
+        batch.update(ref, { orderIndex: index });
+    });
+    
+    try {
+        await batch.commit();
+        console.log("Order saved!");
+    } catch (err) {
+        console.error("Failed to save order", err);
+    }
+  };
+
+
   const toggleLogin = async () => {
     if (!isCreator) {
+      setAuthLoading(true);
       const provider = new GoogleAuthProvider();
       try {
         await signInWithPopup(auth, provider);
       } catch (error) {
         console.error("Login failed", error);
+        setAuthLoading(false);
       }
     } else {
       await signOut(auth);
@@ -271,7 +375,6 @@ export default function ProjectHub() {
         </div>
       );
     }
-    // Pass editingProject as initialData (if null, form is empty)
     return <UploadForm initialData={editingProject} onCancel={() => navigate('#/')} onSubmit={handleSave} />;
   }
 
@@ -310,12 +413,31 @@ export default function ProjectHub() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProjects.map(p => (
-              <div key={p.id} onClick={() => navigate(`#/project/${p.id}`)} className="group bg-white border border-slate-200 rounded-xl overflow-hidden hover:shadow-xl hover:shadow-slate-200/50 hover:border-indigo-200 transition-all cursor-pointer flex flex-col h-[280px] relative">
+            {filteredProjects.map((p, index) => {
+               const theme = COLORS[p.color || 'indigo'];
+               return (
+              <div 
+                key={p.id}
+                onClick={() => navigate(`#/project/${p.id}`)}
+                onDragOver={(e) => isCreator && handleDragOver(e, index)}
+                className={`group bg-white border rounded-xl overflow-hidden transition-all cursor-pointer flex flex-col h-[280px] relative ${theme.border} ${theme.shadow} hover:shadow-xl`}
+              >
                 
-                {/* --- CREATOR ACTIONS (EDIT / DELETE) --- */}
+                {/* --- CREATOR ACTIONS --- */}
                 {isCreator && (
                   <div className="absolute top-3 right-3 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {/* DRAG HANDLE */}
+                    <div 
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, index)}
+                      onDragEnd={handleDragEnd}
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-2 bg-white text-slate-400 hover:text-slate-800 border border-slate-200 rounded-full shadow-sm cursor-grab active:cursor-grabbing"
+                      title="Drag to Reorder"
+                    >
+                       <GripVertical className="w-4 h-4" />
+                    </div>
+
                     <button 
                       onClick={(e) => handleEdit(p, e)}
                       className="p-2 bg-white text-slate-500 hover:text-indigo-600 border border-slate-200 rounded-full shadow-sm hover:shadow-md transition-all"
@@ -332,22 +454,24 @@ export default function ProjectHub() {
                     </button>
                   </div>
                 )}
-                {/* --------------------------------------- */}
+                {/* ----------------------- */}
 
                 <div className="p-6 flex-1">
                   <div className="flex justify-between items-start mb-4">
-                    <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><Code className="w-5 h-5" /></div>
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${theme.bg} ${theme.text}`}>
+                      <Code className="w-5 h-5" />
+                    </div>
                     <ExternalLink className="w-4 h-4 text-slate-300 group-hover:text-indigo-400" />
                   </div>
-                  <h3 className="text-lg font-bold text-slate-900 mb-2 line-clamp-1 group-hover:text-indigo-600">{p.title}</h3>
+                  <h3 className={`text-lg font-bold text-slate-900 mb-2 line-clamp-1 group-hover:${theme.text}`}>{p.title}</h3>
                   <p className="text-slate-500 text-sm line-clamp-3 leading-relaxed">{p.description}</p>
                 </div>
                 <div className="px-6 py-4 border-t border-slate-50 bg-slate-50/50 group-hover:bg-white transition-colors flex items-center justify-between">
                   <span className="text-xs font-medium text-slate-400 bg-white border border-slate-200 px-2 py-1 rounded">Web App</span>
-                  <span className="text-xs font-medium text-indigo-600 opacity-0 group-hover:opacity-100 flex items-center gap-1">Launch <ArrowLeft className="w-3 h-3 rotate-180" /></span>
+                  <span className={`text-xs font-medium opacity-0 group-hover:opacity-100 flex items-center gap-1 ${theme.text}`}>Launch <ArrowLeft className="w-3 h-3 rotate-180" /></span>
                 </div>
               </div>
-            ))}
+            )})}
           </div>
         )}
       </main>
